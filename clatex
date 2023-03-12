@@ -1,0 +1,1095 @@
+#! /usr/bin/env python3
+
+import os
+import re
+import sys
+import time
+import glob
+import shutil
+import argparse
+import subprocess
+from datetime import datetime
+
+try:
+    import gi
+    gi.require_version('Gtk', '3.0')
+    from gi.repository import Gtk, Gio
+except:
+    pass
+
+
+PDF_VIEWER = 'open'
+
+C_WARNING = '\033[93m'
+C_ERROR   = '\033[0;31m'
+C_INFO    = '\033[0;32m'
+C_RESET   = '\033[0m'
+
+def print_info(msg):
+    if args.quiet:
+        return
+    print(msg)
+
+def print_good(msg):
+    if args.quiet:
+        return
+    print(C_INFO + msg + C_RESET)
+
+def print_warn(msg):
+    if args.quiet:
+        return
+    print(C_WARNING + msg + C_RESET)
+
+def print_err(msg):
+    if args.quiet:
+        return
+    print(C_ERROR + msg + C_RESET)
+
+# templates
+template_pandoc = r"""
+\documentclass{beamer}
+\usetheme{mini}
+
+\input{physics.tex}
+\input{susy.tex}
+
+$if(verbatim-in-note)$
+\usepackage{fancyvrb}
+$endif$
+$if(url)$
+\usepackage{url}
+$endif$
+$if(graphics)$
+\usepackage{graphicx}
+\makeatletter
+\def\ScaleIfNeeded{%
+  \ifdim\Gin@nat@width>\linewidth
+    \linewidth
+  \else
+    \Gin@nat@width
+  \fi
+}
+\makeatother
+\let\Oldincludegraphics\includegraphics
+%\renewcommand{\includegraphics}[2][]{\Oldincludegraphics[width=\ScaleIfNeeded]{#2}}
+$endif$
+
+$for(header-includes)$
+$header-includes$
+$endfor$
+
+$if(title)$
+\title{$title$}
+$endif$
+$if(author)$
+\author{$for(author)$$author$$sep$ \and $endfor$}
+$endif$
+$if(meeting)$
+\date[$meeting$]{$date$}
+$else$
+\date[]{$date$}
+$endif$
+
+\begin{document}
+\centering
+
+$if(title)$
+\frame{\titlepage}
+$endif$
+
+$body$
+
+\end{document}
+"""
+
+template_slides = r"""
+\documentclass[center,9pt,cm,aspectratio=169]{beamer}
+
+\usetheme{mini}
+\input{physics.tex}
+
+\title{}
+\author{Francisco Alonso}
+\institute{UNLP/IFLP}
+\date[]{\today}
+%%\titlegraphic{\img{0.12}{iflp_logo.pdf}\hspace{0.8cm}\img{0.12}{atlas_logo.pdf}}
+
+\begin{document}
+\centering
+
+\begin{frame}[plain]
+  \titlepage
+\end{frame}
+
+\begin{frame}{}
+
+\end{frame}
+
+\end{document}
+"""
+
+template_python_fns = r"""
+# functions
+def bdoc():
+    print(r'\documentclass[center,9pt,cm,aspectratio=169]{beamer}')
+    print(r'\usetheme{mini}')
+    print(r'\begin{document}')
+    print(r'\centering')
+
+def edoc():
+    print(r"\end{document}")
+
+def bframe(title=''):
+    sanitized_title = title.replace('_', r'\_')
+    print()
+    print(r'\begin{frame}{%s}' % sanitized_title)
+    print()
+
+def eframe():
+    print()
+    print(r'\end{frame}')
+    print()
+
+def spc():
+    print()
+
+def vspace(arg):
+    print(r'\vspace{%s}' % arg)
+
+def text(_text):
+    print(_text)
+
+def img(width, path):
+    print(r'\includegraphics[width=%s\textwidth]{%s}' % (width, path))
+
+bf = bframe
+ef = eframe
+# ------
+"""
+
+template_python_before = r"""
+bdoc()
+"""
+
+template_python_after = r"""
+edoc()
+"""
+
+def find_tex_file():
+    tex_files = []
+    for f in os.listdir('.'):
+        if f.startswith('.'):
+            continue
+        if f.endswith('.tex'):
+            tex_files.append(f)
+
+    main = []
+    if len(tex_files) == 1:
+        return tex_files[0]
+    else:
+        for f in tex_files:
+            try:
+                tex = open(f).read()
+                if r'\documentclass' in tex:
+                    main.append(f)
+            except:
+                continue
+
+    if not main:
+        return None
+
+    if len(main) > 1:
+        print_err('More than one main file was found')
+        return None
+    else:
+        return main[0]
+
+
+def get_mtime(fname):
+    return os.path.getmtime(fname)
+
+
+def get_tex_dependencies(fname):
+
+    dependencies = []
+    for line in open(fname):
+        line = line.replace('\n', '')
+
+        dep = re.match(r'\\input{(.*)}', line)
+        if dep is not None:
+            dep = dep.groups()[0]
+            if not '.' in dep:
+                dep += '.tex'
+            if os.path.isfile(dep):
+                dependencies.append(dep)
+            continue
+
+        dep = re.match(r'\\include{(.*)}', line)
+        if dep is not None:
+            dep = dep.groups()[0]
+            if not '.' in dep:
+                dep += '.tex'
+            if os.path.isfile(dep):
+                dependencies.append(dep)
+            continue
+
+    return dependencies
+
+
+def get_bibtex_style(main_tex):
+
+    for line in open(main_tex):
+        line = line.replace('\n', '')
+
+        style = re.match(r'\\bibliographystyle{(.*)}', line)
+        if style is not None:
+            style = style.groups()[0]
+
+            if os.path.isfile(style+'.bst'):
+                return style
+            continue
+
+    return None
+
+
+#
+# Colorize LaTeX output.
+#
+def bytes_to_human(num):
+    num = int(num)
+    for unit in ['', 'K', 'M', 'G', 'T', 'P', 'E', 'Z']:
+        if abs(num) < 1024.0:
+            return "%3.1f %sB" % (num, unit)
+        num /= 1024.0
+    return "%.1f %sB" % (num, 'Y')
+
+
+def colorize_latex_output(logfile, show=True):
+
+    try:
+        enc = 'iso-8859-15'
+        log = open(logfile, 'r', encoding=enc).read().split('\n')
+    except UnicodeDecodeError as e:
+        raise
+
+    line_error = re.compile('^\./(\w*.tex)\:(\d*)\: (.*)')
+
+    n_warning = 0
+    n_error = 0
+
+    show_warnings = args.debug
+    compile_ok = True
+    compile_info = (0, 0, 0, 0)
+
+    for i, line in enumerate(log):
+
+        if 'Output written' in line:
+
+            try:
+                sline = line.split()
+
+                name = os.path.basename(sline[3])
+                pages = sline[4][1:]
+                #size = bytes_to_human(sline[6])
+                compile_info = (pages, n_warning, n_error)
+            except:
+                pass
+
+            # for xelatex
+            # Output written on XXXX (XX pages)
+            try:
+                sline = line.split()
+
+                name = sline[3]
+                pages = sline[4][1:].replace(' pages', '')
+                compile_info = (pages, n_warning, n_error)
+            except:
+                pass
+
+        elif 'No pages of output' in line:
+            compile_ok = False
+            if show:
+                print_err(line)
+
+        elif 'no output PDF file produced!' in line:
+            compile_ok = False
+            if show:
+                print_err(line)
+
+        if 'Underfull' in line or 'Overfull' in line or 'Warning:' in line:
+            n_warning += 1
+            if show and show_warnings:
+                print_warn(line)
+
+        if '*** (job aborted, no legal \end found)' in line:
+            compile_ok = False
+            if show:
+                print_err(line)
+            n_error += 1
+
+        le = line_error.match(line)
+        if le:
+            if show:
+                print_err('%s (in %s, line %s)' % (le.groups()[2], le.groups()[0], le.groups()[1]))
+            n_error += 1
+
+    return compile_ok, compile_info
+
+
+def colorize_bibtex_output(logfile):
+
+    re_updatefile = re.compile (".*INFO - Found BibTeX data source '(?P<filename>.*)'$")
+    re_error = re.compile (".*Utils.pm:[0-9]+> (?P<kind>(WARN|ERROR)) .* line (?P<line>[0-9]+), (?P<text>.*)")
+
+    try:
+        log = open(logfile, "r")
+    except:
+        print_warn("cannot open bibtex logfile: %s" % logfile)
+        return
+
+    for line in log:
+        m = re_updatefile.match (line)
+        if m:
+            current_bib = m.group ("filename")
+
+        m = re_error.match (line)
+        if m:
+            print_info('%s %s %s' % (m.group("kind"), int(m.group("line")),  m.group("text")))
+
+
+#
+# Compile tex
+#
+def get_clatex_path(fname):
+    return os.path.join(clatex_dir, fname) if clatex_dir is not None else fname
+
+def compile_tex(input_path, output_path):
+
+    name = os.path.basename(input_path)[:-4]
+
+    tmp_pdf_file = get_clatex_path('%s.pdf' % name)
+
+    if args.only:
+        filecmd = r'"\includeonly{%s}\input{%s}"' % (args.only, input_path)
+    else:
+        filecmd = input_path
+
+    if args.verbose:
+        if clatex_dir is None:
+            pdflatex_cmd = '%s -file-line-error %s' % (args.engine, filecmd)
+        else:
+            pdflatex_cmd = '%s -output-directory=%s -file-line-error %s' % (args.engine, clatex_dir, filecmd)
+    else:
+        if clatex_dir is None:
+            pdflatex_cmd = '%s -interaction=batchmode -file-line-error --shell-escape %s > /dev/null' % (args.engine, filecmd)
+        else:
+            pdflatex_cmd = '%s -output-directory=%s -interaction=batchmode -file-line-error --shell-escape %s > /dev/null' % (args.engine, clatex_dir, filecmd)
+
+    if os.path.isdir('images'):
+        os.environ['TEXINPUTS'] = './/:./images//:'
+
+    if os.path.isdir('figures'):
+        os.environ['TEXINPUTS'] = './/:./figures//:'
+
+
+    st = subprocess.call(pdflatex_cmd, shell=True)
+
+    logfile = get_clatex_path('%s.log' % name)
+
+    if os.path.isfile(logfile):
+        compile_ok, compile_info = colorize_latex_output(logfile, False)
+
+    if not os.path.isfile(tmp_pdf_file):
+        compile_ok = False
+
+    if compile_ok and args.bibtex:
+
+        print_info('Running bibtex')
+        pwd = os.getcwd()
+
+        os.environ['TEXMFOUTPUT'] = clatex_dir+':'
+        os.environ['BIBINPUTS'] = pwd + ':'
+        os.environ['BSTINPUT'] = clatex_dir + ':' + pwd + ':'
+
+        style = get_bibtex_style(input_path)
+
+        if style is not None:
+            os.system('cp %s.bst %s/%s' % (style, clatex_dir, style))
+
+        os.chdir(clatex_dir)
+        bibtex_cmd = 'bibtex %s.aux' % name
+        os.system(bibtex_cmd)
+        os.chdir(pwd)
+
+        colorize_bibtex_output(clatex_dir + '/' + name+'.blg')
+
+    if compile_ok and not args.fast:
+        subprocess.call(pdflatex_cmd, shell=True)
+        subprocess.call(pdflatex_cmd, shell=True)
+
+    if os.path.isfile(logfile):
+        compile_ok, compile_info = colorize_latex_output(logfile)
+
+    if not os.path.isfile(tmp_pdf_file):
+        compile_ok = False
+
+    return compile_ok, compile_info, tmp_pdf_file
+
+#
+# Create temporary tex files
+#
+def create_plain_tex(input_tex, output_tex):
+
+    template_before = r"""\documentclass{article}
+\usepackage[utf8]{inputenc}
+
+\begin{document}
+"""
+
+    template_after = r"""
+\end{document}
+"""
+
+    text = open(input_tex, 'r').read()
+
+    with open(output_tex, 'wt', encoding='utf-8') as of:
+        of.write(template_before)
+        of.write(text)
+        of.write(template_after)
+
+
+def create_tikz_tex(input_tex, output_tex):
+
+    template_before = r"""\documentclass{article}
+\usepackage[utf8]{inputenc}
+\usepackage{mathptmx}
+\usepackage{tikz}
+\usetikzlibrary{patterns}
+\usepackage{xifthen}
+
+%\usepackage{color}
+\usepackage[active,pdftex,tightpage]{preview}
+\PreviewEnvironment[]{tikzpicture}
+\PreviewEnvironment[]{pgfpicture}
+\DeclareSymbolFont{symbolsb}{OMS}{cmsy}{m}{n}
+\SetSymbolFont{symbolsb}{bold}{OMS}{cmsy}{b}{n}
+\DeclareSymbolFontAlphabet{\mathcal}{symbolsb}
+\begin{document}
+"""
+
+    template_after = r"""
+\end{document}
+"""
+
+    tikzplot = open(input_tex, 'r').read()
+
+    with open(output_tex, 'wt', encoding='utf-8') as of:
+        of.write(template_before)
+        of.write(tikzplot)
+        of.write(template_after)
+
+
+def create_table_tex(input_tex, output_tex, scale):
+
+    tex = r'''\documentclass{article}
+\usepackage{graphicx}
+\usepackage[landscape]{geometry}
+\usepackage{multirow}
+\usepackage{booktabs}
+\begin{document}
+\pagestyle{empty}\n'''
+
+    tex += '\n'
+    if scale is not None:
+        tex += '\scalebox{%s}{%s}' % (float(scale), open(input_tex).read())
+    else:
+        tex += open(input_tex).read()
+    tex += '\n\\end{document}'
+
+    with open(output_tex, 'wt', encoding='utf-8') as of:
+        of.write(tex)
+
+
+def create_plots_tex(input_plots, output_tex):
+
+    header = r"""%% Created with clatex
+\documentclass[center,10pt,cm,aspectratio=169]{beamer}
+
+% basic style
+\renewcommand\familydefault{\rmdefault}
+\setbeamercolor*{frametitle}{bg=white,fg=black}
+\setbeamertemplate{navigation symbols}{}
+
+\begin{document}
+\centering
+
+   """
+
+    footer = r"""
+
+\end{document}
+"""
+
+    body = ""
+    counter = 0
+
+    #chunks = [pdf_files[x:x+args.cols] for x in xrange(0, len(pdf_files), args.cols)]
+
+    for plot in input_plots:
+
+        if plot[-3:] not in ('pdf', 'png'):
+            continue
+
+        title = plot[:-4].replace('_', '\_')
+
+        if len(title) > 75:
+            title = '{\\tiny %s}' % title
+        elif len(title) > 60:
+            title = '{\\scriptsize %s}' % title
+        elif len(title) > 45:
+            title = '{\\small %s}' % title
+
+        body += r"""
+\begin{frame}{%s}
+    \includegraphics[width=0.9\textwidth,height=0.9\textheight,keepaspectratio]{%s}
+\end{frame}
+""" % (title, plot)
+        counter += 1
+
+    if not body:
+        print_err('No plots to add')
+        return None
+
+    text = header + body + footer
+
+    with open(output_tex, 'w+') as f:
+        f.write(text)
+
+    print_good('Created slides "%s" with %i plots' % (output_tex, counter))
+
+    return
+
+def create_python_text(input_py, tmp_py, output_tex):
+
+    python_code = template_python_fns + \
+        template_python_before + \
+        open(input_py).read() +\
+        template_python_after
+
+    with open(tmp_py, 'w+') as f:
+        f.write(python_code)
+
+    out = subprocess.check_output(['python', tmp_py])
+
+    with open(output_tex, 'w+') as f:
+        f.write(out.decode('utf-8'))
+
+
+def convert_image(fname):
+    iname = fname
+    oname = os.path.splitext(fname)[0] + '.pdf'
+    cmd = 'convert %s %s' % (iname, oname)
+    os.system(cmd)
+
+
+def crop_pdf(input_pdf, output_pdf):
+    os.system('pdfcrop {0} {1} > /dev/null'.format(input_pdf, output_pdf))
+
+
+def move_file(old_path, new_path):
+    shutil.move(old_path, new_path)
+
+def clean(fname):
+    if clatex_dir is None:
+        # actually we have to remove all .aux/.pdf files
+        return
+
+    try:
+        os.unlink(fname)
+    except FileNotFoundError:
+        pass
+    except IsADirectoryError:
+        shutil.rmtree(fname)
+
+
+class TexWatcher():
+
+    def __init__(self, main_tex, tmp_tex, main_pdf, input_type, dependencies=[]):
+
+        self._main_tex = main_tex
+        self._tmp_tex  = tmp_tex
+        self._main_pdf = main_pdf
+        self.input_type = input_type
+
+        self._dep_tex = dependencies
+
+        self._file = Gio.File.new_for_path(main_tex)
+        self._dep_files = [ Gio.File.new_for_path(dep_tex) for dep_tex in dependencies ]
+
+        self.reload_hash()
+
+        self._monitor = self._file.monitor_file(Gio.FileMonitorFlags.NONE, None)
+        self._monitor.connect("changed", self.on_file_changed)
+
+        self._dep_monitor = [ tex.monitor_file(Gio.FileMonitorFlags.NONE, None) for tex in self._dep_files ]
+        for dep_mon in self._dep_monitor:
+            dep_mon.connect("changed", self.on_file_changed)
+
+        self._compiling = False
+
+        # List of hooks functions that should be called before
+        # and after a compilation. The latter functions will be
+        # passed a string describing the error in the compilation,
+        # of True if it didn't fail.
+        # self._on_compilation_start = []
+        # self._on_compilation_finished = []
+
+    def reload_hash(self):
+        with open(self._main_tex) as handle:
+                self._hash = hash(handle.read())
+
+        self._dep_hash = [ hash(open(dep).read()) for dep in self._dep_tex ]
+
+
+    def on_file_changed(self, file_, other_file, event_type, user_param):
+        old_hash = self._hash
+        old_dep_hash = self._dep_hash
+        self.reload_hash()
+
+        if old_hash != self._hash or old_dep_hash != self._dep_hash:
+            self._compiling = True
+            print_info('File changed. Compiling again ...')
+            if self.input_type != 'main':
+                _, _, _ = _prepare_tex(self._main_tex, self._tmp_tex)
+                _compile_tex(self._tmp_tex, self._main_pdf, self.input_type)
+            else:
+                _compile_tex(self._main_tex, self._main_pdf, self.input_type)
+            self._compiling = False
+
+
+# from watchdog.observers import Observer
+# from .events import ImagesEventHandler
+# from watchdog.events import FileSystemEventHandler
+
+# class TexEventHandler(FileSystemEventHandler):
+
+#     def __init__(self):
+
+#         self._compiling = False
+
+#     #     self.reload_hash()
+
+#     # def reload_hash(self):
+#     #     with open(self._main_tex) as handle:
+#     #             self._hash = hash(handle.read())
+
+#     #     self._dep_hash = [ hash(open(dep).read()) for dep in self._dep_tex ]
+
+#     def on_modified(self, event):
+#         # old_hash = self._hash
+#         # old_dep_hash = self._dep_hash
+#         # self.reload_hash()
+
+#         # if old_hash != self._hash or old_dep_hash != self._dep_hash:
+#         self._compiling = True
+#         print_msg('File changed. Compiling again ...', INFO)
+#         _compile(event, self._main_pdf)
+#         self._compiling = False
+
+
+#         self.process(event)
+
+#     def process(self, event):
+#         filename, ext = os.path.splitext(event.src_path)
+#         filename = f"{filename}_thumbnail.jpg"
+
+#         image = Image.open(event.src_path)
+#         image = grayscale(image)
+#         image.thumbnail(self.THUMBNAIL_SIZE)
+#         image.save(filename)
+
+# class TexWatcher:
+
+#     def __init__(self, main_tex, main_pdf, dependecies=[]):
+
+#         self._main_tex = main_tex
+#         self._main_pdf = main_pdf
+
+#         self._dep_tex = dependencies
+
+#         self.__event_observer = Observer()
+#         self.__event_handler = EventHandler()
+
+#     def run(self):
+#         self.start()
+#         try:
+#             while True:
+#                 time.sleep(1)
+#         except KeyboardInterrupt:
+#             self.stop()
+
+#     def start(self):
+#         self.__schedule()
+#         self.__event_observer.start()
+
+#     def stop(self):
+#         self.__event_observer.stop()
+#         self.__event_observer.join()
+
+#     def __schedule(self):
+#         self.__event_observer.schedule(self.__event_handler, self.__main_tex)
+#         for tex in self._dep_files:
+#             self.__event_observer.schedule(self.__event_handler, tex)
+
+
+
+def _prepare_plots(inputs):
+
+    # Get plot files from inputs. If input is None use all .pdf from current directory
+    plots = []
+    if not inputs:
+        plots = [ i for i in os.listdir('.') if i[-3:] in ('pdf', 'png') and i != 'plots.pdf' ]
+
+    elif isinstance(inputs, list):
+        for inp in inputs:
+            if os.path.isdir(inp):
+                plots.extend([ os.path.join(inp, i) for i in os.listdir(inp) if i[-3:] in ('pdf', 'png') ])
+            else:
+                plots.extend([ i for i in inputs if i[-3:] in ('pdf', 'png') and os.path.isfile(i) ])
+    else:
+        if os.path.isdir(inputs):
+            plots = [ os.path.join(inputs, i) for i in os.listdir(inputs) if i[-3:] in ('pdf', 'png') ]
+        else:
+            plots.append(inputs)
+
+
+    # Filter pdfs
+    if args.filter is not None:
+        new_plots = []
+
+        if '&&' in args.filter:
+            filters = args.filter.split('&&')
+            for plot in plots:
+                if all([ft in plot for ft in filters]):
+                    new_plots.append(plot)
+
+        elif '||' in args.filter:
+            filters = args.filter.split('||')
+            for plot in plots:
+                if any([ft in plot for ft in filters]):
+                    new_plots.append(plot)
+        else:
+            for plot in plots:
+                if args.filter in plot:
+                    new_plots.append(plot)
+
+        plots = new_plots
+
+    # Sort pdfs
+    if args.sort is not None:
+        plots.sort(key = lambda x: x.split(args.sort_sep)[args.sort-1])
+    else:
+        plots.sort()
+
+
+    # TODO: Matrix/Columns
+    # matrix = ()
+    # if args.cols is not None:
+    #     matrix = (1, int(args.cols))
+    # elif args.matrix is not None:
+    #     rows, cols = args.matrix.split(',')
+    #     matrix = (rows, cols)
+
+    # ...
+
+    return plots
+
+
+def _prepare_tex(main_tex, tmp_tex):
+
+    main_name = os.path.splitext(os.path.basename(main_tex))[0]
+    main_pdf = '%s.pdf' % main_name if args.output is None else args.output
+
+    # Check if tmp tex file is needed
+    input_type = None
+    if args.plain:
+        input_type = 'plain'
+    elif args.tikz:
+        input_type = 'tikz'
+    elif args.table:
+        input_type = 'table'
+    elif main_tex.endswith('.py'):
+        input_type = 'python'
+
+    # check tikz/table/plain
+    if input_type is None:
+
+        text = open(main_tex).read()
+        if r'\documentclass' not in text:
+            if r'\begin{tikzpicture}' in text:
+                input_type = 'tikz'
+            elif r'\begin{tabular}' in text:
+                input_type = 'table'
+            else:
+                input_type = 'plain'
+
+    if input_type is None:
+        input_type = 'main'
+
+    #    tmp_tex, need_crop = _prepare_tex(main_tex, input_type)
+
+    main_name = os.path.splitext(os.path.basename(main_tex))[0]
+
+    tmp_tex = None
+
+    if input_type == 'plain':
+        tmp_tex = get_clatex_path('%s.tex' % main_name) if args.tex is None else args.tex
+
+        print_info('Creating tex %s --> %s' % (main_tex, tmp_tex))
+        create_plain_tex(main_tex, tmp_tex)
+
+    elif input_type == 'python':
+        tmp_py  = get_clatex_path('%s.tmp.py' % main_name)
+        tmp_tex = get_clatex_path('%s.tex' % main_name) if args.tex is None else args.tex
+
+        print_info('Creating tex %s --> %s' % (main_tex, tmp_tex))
+        create_python_text(main_tex, tmp_py, tmp_tex)
+
+    elif input_type == 'tikz':
+        tmp_tex = get_clatex_path('%s.tex' % main_name) if args.tex is None else args.tex
+        args.engine = 'pdflatex'
+
+        print_info('Creating tex %s --> %s' % (main_tex, tmp_tex))
+        create_tikz_tex(main_tex, tmp_tex)
+
+    elif input_type == 'table':
+        tmp_tex = get_clatex_path('%s.tex' % main_name) if args.tex is None else args.tex
+        args.engine = 'pdflatex'
+
+        print_info('Creating tex %s --> %s' % (main_tex, tmp_tex))
+        create_table_tex(main_tex, tmp_tex, do_scale)
+
+    return main_pdf, tmp_tex, input_type
+
+
+def _compile_tex(main_tex, main_pdf, input_type, force=False):
+
+    print_info('Compiling tex %s --> %s' % (main_tex, main_pdf))
+
+    need_compile = False
+    if need_compile or force or not os.path.isfile(main_pdf):
+        need_compile = True
+    else:
+        main_pdf_time = datetime.fromtimestamp(get_mtime(main_pdf))
+        main_tex_time = datetime.fromtimestamp(get_mtime(main_tex))
+
+        diff = (main_tex_time - main_pdf_time).total_seconds()
+        if diff > 0:
+            need_compile = True
+        else:
+            for dep in get_tex_dependencies(main_tex):
+                dep_time = datetime.fromtimestamp(get_mtime(dep))
+                if (dep_time - main_pdf_time).total_seconds() > 0:
+                    need_compile = True
+                    break
+
+    need_crop = input_type in ('table', 'tikz') and not args.nocrop
+
+    if need_compile:
+        compile_ok, compile_info, tmp_pdf_file = compile_tex(main_tex, main_pdf)
+
+        if not compile_ok:
+            return 1
+
+        if need_crop:
+            crop_pdf(tmp_pdf_file, main_pdf)
+        else:
+            move_file(tmp_pdf_file, main_pdf)
+
+        pages, n_warning, n_error = compile_info
+
+        size = bytes_to_human(os.stat(main_pdf).st_size)
+
+        msg = 'Output written on %s, %s page(s), %s, %s warning(s), %s error(s).' % (main_pdf, pages, size, n_warning, n_error)
+        print_good(msg)
+
+    else:
+        print_info('Nothing to be done')
+
+
+
+def main():
+
+    parser = argparse.ArgumentParser(description='Compile latex')
+
+    parser.add_argument('inputs', nargs='*', help='')
+    parser.add_argument('-f', dest='force', action='store_true', help='Force compilation')
+    parser.add_argument('-c', dest='clean', action='store_true', help='Clean all')
+    parser.add_argument('-g', dest='debug', action='store_true', help='Show warnings')
+    parser.add_argument('-q', dest='quiet', action='store_true', help='No prints to std out')
+    parser.add_argument('-o', dest='output',  help='Output pdf name')
+    parser.add_argument('-p', dest='open_pdf', action='store_true', help='Open final pdf')
+    parser.add_argument('-v', dest='verbose', action='store_true', help='Show latex output')
+    parser.add_argument('-b', dest='bibtex', action='store_true', help='Compile bibliography using bibtex')
+    parser.add_argument('-a', dest='fast', action='store_true', help='Compile only once')
+    parser.add_argument('-j', dest='only', default='', help='Include only')
+    parser.add_argument('-t', '--tex', help='Intermediate tex output name')
+    parser.add_argument('--onlytex', action='store_true', help='Only create tex, don\'t compile')
+    parser.add_argument('-z', '--tmp', action='store_true', help='Compile in /tmp.')
+    parser.add_argument('-k', '--keep-tmp-files', dest='keep_tmp_files', action='store_true', help='Keep tmp files')
+    parser.add_argument('-e', '--engine',  default='xelatex', help='Latex engine: pdflatex, xelatex (default), lualatex')
+    parser.add_argument('--tikz',  action='store_true', help='Compile tikz picture')
+    parser.add_argument('--table', action='store_true', help='Compile table')
+    parser.add_argument('--plain', action='store_true', help='Compile plain text')
+    parser.add_argument('-w', dest='watcher', action='store_true', help='Watch file for changes and compile (needs Gtk)')
+    parser.add_argument('--nocrop', action='store_true', help='Don\'t crop pdf output')
+    parser.add_argument('--scale', help='Scale')
+    parser.add_argument('--nodir', action='store_true', help='No clatex output dir')
+    parser.add_argument('--atlas', action='store_true', help='Use --nodir and pdflatex engine (for ATLAS notes/papers) ')
+
+    # Merge pdfs in slides
+    parser.add_argument('--pdfs', action='store_true', help='Merge pdfs in slides')
+    parser.add_argument('--plots', action='store_true', help='Merge plots in slides')
+    parser.add_argument('--filter', help='Filter files (to use with --pdfs)')
+    parser.add_argument('--sort', type=int, default=None, help='')
+    parser.add_argument('--sort-sep', dest='sort_sep', default='_', help='')
+    parser.add_argument('--cols', help='')
+    parser.add_argument('--matrix', help='')
+
+    # Templates
+    parser.add_argument('--sl', dest='slides', help='Create slides template')
+    parser.add_argument('--sd', dest='slidesdir', help='Create slides directory with template')
+
+
+    global args
+    args = parser.parse_args()
+
+    if args.atlas:
+        args.nodir = True
+        args.engine = 'pdflatex'
+
+
+    global clatex_dir
+    if args.nodir:
+        clatex_dir = None
+    elif args.tmp:
+        clatex_dir = '/tmp/clatex'
+    else:
+        clatex_dir = '.clatex'
+
+    #
+    # Templates (create and exit!)
+    #
+    if args.slidesdir is not None:
+        name = args.slidesdir
+
+        os.system('mkdir -p %s' % name)
+        os.system('mkdir -p %s/images' % name)
+
+        with open('%s/slides.tex' % name, 'w+') as f:
+            f.write(template_slides)
+
+        print_good('Slides directory created: %s' % name)
+        return 0
+
+    elif args.slides is not None:
+        name = args.slides
+        with open('%s.tex' % name, 'w+') as f:
+            f.write(template_slides)
+
+        print_good('Slides template created: %s.tex' % name)
+        return 0
+
+
+    # clean clatex dir
+    if args.clean:
+        clean(clatex_dir)
+        return 0
+
+    if args.force:
+        clean(clatex_dir)
+
+
+    # create clatex dir
+    if clatex_dir is not None:
+        try:
+            os.makedirs(clatex_dir)
+        except OSError as exception:
+            pass
+
+
+    #
+    # Find tex or create tmp tex if necessary
+    #
+    inputs = args.inputs
+
+    main_tex = None
+    tmp_tex  = None
+    need_crop = False
+
+    # Slides from input pdfs (--pdfs)
+    if args.plots or args.pdfs:
+
+        plots = _prepare_plots(inputs)
+
+        main_tex = '%s/plots.tex' % clatex_dir if args.tex is None else args.tex
+
+        create_plots_tex(plots, main_tex) ##, matrix)
+
+
+    elif not inputs:
+        main_tex = find_tex_file()
+
+    elif inputs:
+        main_tex = args.inputs[0]
+
+
+    if main_tex is None:
+        print_err('There is no tex to compile...')
+        return 1
+
+
+    main_pdf, tmp_tex, input_type = _prepare_tex(main_tex, tmp_tex)
+
+    # exit now if only create tex option is used
+    if args.onlytex:
+        return 0
+    #     if args.tex:
+    #         if args.output is not None:
+    #             tex_path = args.output
+    #             move_file(tmp_tex_path, args.output)
+    #         else:
+    #             pass
+
+
+    #
+    # Compilation
+    #
+    if tmp_tex is not None:
+        _compile_tex(tmp_tex, main_pdf, input_type, args.force)
+    else:
+        _compile_tex(main_tex, main_pdf, input_type, args.force)
+
+    # Continuous compilation
+    if args.watcher:
+        dependencies = get_tex_dependencies(main_tex)
+        try:
+            _watcher = TexWatcher(main_tex, tmp_tex, main_pdf, input_type, dependencies)
+            Gtk.main()
+        except KeyboardInterrupt:
+            Gtk.main_quit()
+
+
+    # Clean temporary files
+    if not args.keep_tmp_files and not args.tmp and not args.nodir:
+        clean(clatex_dir)
+
+    # Open output pdf
+    if args.open_pdf:
+        subprocess.call([PDF_VIEWER, main_pdf])
+
+
+
+
+if __name__ == '__main__':
+    main()
