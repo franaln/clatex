@@ -945,7 +945,7 @@ def main():
     parser.add_argument('--nocrop', action='store_true', help='Don\'t crop pdf output')
     parser.add_argument('--scale', help='Scale')
     parser.add_argument('--nodir', action='store_true', help='No clatex output dir')
-    parser.add_argument('--atlas', action='store_true', help='Use --nodir and pdflatex engine (for ATLAS notes/papers) ')
+    parser.add_argument('--atlas', action='store_true', help='Use --nodir and pdflatex engine (for ATLAS notes/papers)')
 
     # Merge pdfs in slides
     parser.add_argument('--pdfs', action='store_true', help='Merge pdfs in slides')
