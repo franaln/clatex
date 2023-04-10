@@ -601,15 +601,19 @@ def move_file(old_path, new_path):
 
 def clean(fname):
     if clatex_dir is None:
-        # actually we have to remove all .aux/.pdf files
+        # FIX: actually we have to remove all .aux/.pdf files
         return
 
-    try:
-        os.unlink(fname)
-    except FileNotFoundError:
-        pass
-    except IsADirectoryError:
-        shutil.rmtree(fname)
+    # try:a
+    #     os.unlink(fname)
+    # except FileNotFoundError:
+    #     pass
+    # except IsADirectoryError:
+
+    path = os.path.abspath(fname)
+
+    if os.path.exists(path):
+        shutil.rmtree(path)
 
 
 class TexWatcher():
