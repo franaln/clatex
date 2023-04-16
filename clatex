@@ -11,12 +11,10 @@ import subprocess
 from datetime import datetime
 
 try:
-    import gi
-    gi.require_version('Gtk', '3.0')
-    from gi.repository import Gtk, Gio
+    from watchdog.observers import Observer
+    from watchdog.events import FileSystemEventHandler
 except:
     pass
-
 
 PDF_VIEWER = 'open'
 
@@ -616,135 +614,65 @@ def clean(fname):
         shutil.rmtree(path)
 
 
-class TexWatcher():
+
+
+class Handler(FileSystemEventHandler):
 
     def __init__(self, main_tex, tmp_tex, main_pdf, input_type, dependencies=[]):
+        super().__init__()
 
         self._main_tex = main_tex
         self._tmp_tex  = tmp_tex
         self._main_pdf = main_pdf
         self.input_type = input_type
 
-        self._dep_tex = dependencies
+        self._compiling = False
+        self._watch_files = [ os.path.realpath(main_tex), ] + [ os.path.realpath(dep) for dep in dependencies ]
 
-        self._file = Gio.File.new_for_path(main_tex)
-        self._dep_files = [ Gio.File.new_for_path(dep_tex) for dep_tex in dependencies ]
-
-        self.reload_hash()
-
-        self._monitor = self._file.monitor_file(Gio.FileMonitorFlags.NONE, None)
-        self._monitor.connect("changed", self.on_file_changed)
-
-        self._dep_monitor = [ tex.monitor_file(Gio.FileMonitorFlags.NONE, None) for tex in self._dep_files ]
-        for dep_mon in self._dep_monitor:
-            dep_mon.connect("changed", self.on_file_changed)
-
+    def recompile(self, event):
+        self._compiling = True
+        print_info('File %s changed. Compiling again ...' % event.src_path)
+        if self.input_type != 'main':
+            _, _, _ = _prepare_tex(self._main_tex, self._tmp_tex)
+            _compile_tex(self._tmp_tex, self._main_pdf, self.input_type)
+        else:
+            _compile_tex(self._main_tex, self._main_pdf, self.input_type)
         self._compiling = False
 
-        # List of hooks functions that should be called before
-        # and after a compilation. The latter functions will be
-        # passed a string describing the error in the compilation,
-        # of True if it didn't fail.
-        # self._on_compilation_start = []
-        # self._on_compilation_finished = []
-
-    def reload_hash(self):
-        with open(self._main_tex) as handle:
-                self._hash = hash(handle.read())
-
-        self._dep_hash = [ hash(open(dep).read()) for dep in self._dep_tex ]
-
-
-    def on_file_changed(self, file_, other_file, event_type, user_param):
-        old_hash = self._hash
-        old_dep_hash = self._dep_hash
-        self.reload_hash()
-
-        if old_hash != self._hash or old_dep_hash != self._dep_hash:
-            self._compiling = True
-            print_info('File changed. Compiling again ...')
-            if self.input_type != 'main':
-                _, _, _ = _prepare_tex(self._main_tex, self._tmp_tex)
-                _compile_tex(self._tmp_tex, self._main_pdf, self.input_type)
-            else:
-                _compile_tex(self._main_tex, self._main_pdf, self.input_type)
-            self._compiling = False
+    def on_any_event(self, event):
+        if event.is_directory:
+            return None
+        elif event.event_type == 'created':
+            # Event is created, you can process it now
+            # print("Watchdog received created event - % s." % event.src_path)
+            pass
+        elif event.event_type == 'modified':
+            # Event is modified, you can process it now
+            # print("Watchdog received modified event - % s." % event.src_path)
+            if event.src_path in self._watch_files:
+                self.recompile(event)
 
 
-# from watchdog.observers import Observer
-# from .events import ImagesEventHandler
-# from watchdog.events import FileSystemEventHandler
+class TexWatcher:
+    def __init__(self):
+        self.observer = Observer()
 
-# class TexEventHandler(FileSystemEventHandler):
+    def run(self, main_tex, tmp_tex, main_pdf, input_type, dependencies=[]):
 
-#     def __init__(self):
+        main_dir = os.path.dirname(os.path.realpath(main_tex))
 
-#         self._compiling = False
+        event_handler = Handler(main_tex, tmp_tex, main_pdf, input_type, dependencies=[])
 
-#     #     self.reload_hash()
+        self.observer.schedule(event_handler, main_dir, recursive=True)
+        self.observer.start()
+        try:
+            while True:
+                time.sleep(5)
+        except:
+            self.observer.stop()
+            print("Observer Stopped")
 
-#     # def reload_hash(self):
-#     #     with open(self._main_tex) as handle:
-#     #             self._hash = hash(handle.read())
-
-#     #     self._dep_hash = [ hash(open(dep).read()) for dep in self._dep_tex ]
-
-#     def on_modified(self, event):
-#         # old_hash = self._hash
-#         # old_dep_hash = self._dep_hash
-#         # self.reload_hash()
-
-#         # if old_hash != self._hash or old_dep_hash != self._dep_hash:
-#         self._compiling = True
-#         print_msg('File changed. Compiling again ...', INFO)
-#         _compile(event, self._main_pdf)
-#         self._compiling = False
-
-
-#         self.process(event)
-
-#     def process(self, event):
-#         filename, ext = os.path.splitext(event.src_path)
-#         filename = f"{filename}_thumbnail.jpg"
-
-#         image = Image.open(event.src_path)
-#         image = grayscale(image)
-#         image.thumbnail(self.THUMBNAIL_SIZE)
-#         image.save(filename)
-
-# class TexWatcher:
-
-#     def __init__(self, main_tex, main_pdf, dependecies=[]):
-
-#         self._main_tex = main_tex
-#         self._main_pdf = main_pdf
-
-#         self._dep_tex = dependencies
-
-#         self.__event_observer = Observer()
-#         self.__event_handler = EventHandler()
-
-#     def run(self):
-#         self.start()
-#         try:
-#             while True:
-#                 time.sleep(1)
-#         except KeyboardInterrupt:
-#             self.stop()
-
-#     def start(self):
-#         self.__schedule()
-#         self.__event_observer.start()
-
-#     def stop(self):
-#         self.__event_observer.stop()
-#         self.__event_observer.join()
-
-#     def __schedule(self):
-#         self.__event_observer.schedule(self.__event_handler, self.__main_tex)
-#         for tex in self._dep_files:
-#             self.__event_observer.schedule(self.__event_handler, tex)
-
+        self.observer.join()
 
 
 def _prepare_plots(inputs):
@@ -973,6 +901,7 @@ def main():
         args.engine = 'pdflatex'
 
 
+    # Compilation directory
     global clatex_dir
     if args.nodir:
         clatex_dir = None
@@ -980,6 +909,9 @@ def main():
         clatex_dir = '/tmp/clatex'
     else:
         clatex_dir = '.clatex'
+
+
+
 
     #
     # Templates (create and exit!)
@@ -1077,11 +1009,9 @@ def main():
     # Continuous compilation
     if args.watcher:
         dependencies = get_tex_dependencies(main_tex)
-        try:
-            _watcher = TexWatcher(main_tex, tmp_tex, main_pdf, input_type, dependencies)
-            Gtk.main()
-        except KeyboardInterrupt:
-            Gtk.main_quit()
+
+        _watcher = TexWatcher()
+        _watcher.run(main_tex, tmp_tex, main_pdf, input_type, dependencies)
 
 
     # Clean temporary files
