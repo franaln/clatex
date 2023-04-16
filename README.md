@@ -11,4 +11,28 @@ clatex
 
 To do:
 - Improve documentation and examples
-- Remove GTK dependecy to watch for file changes
+
+
+## Example of slides from python script
+
+* slides.py:
+```
+bframe()
+print('This is some text ...')
+eframe()
+
+bframe('Plots')
+img(0.45, 'plot1.png')
+img(0.45, 'plot2.png')
+eframe()
+
+for i in range(2):
+    bframe(f'This is plot {i}')
+    img(0.8, f'plot{i}.png')
+    eframe()
+```
+
+* To compile
+```
+clatex slides.py
+```
