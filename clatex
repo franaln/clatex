@@ -577,7 +577,7 @@ def create_python_text(input_py, tmp_py, output_tex):
     with open(tmp_py, 'w+') as f:
         f.write(python_code)
 
-    out = subprocess.check_output(['python', tmp_py])
+    out = subprocess.check_output(['python3', tmp_py])
 
     with open(output_tex, 'w+') as f:
         f.write(out.decode('utf-8'))
@@ -615,64 +615,72 @@ def clean(fname):
 
 
 
+watchdog_available = True
+try:
 
-class Handler(FileSystemEventHandler):
+    from watchdog.observers import Observer
+    from watchdog.events import FileSystemEventHandler
 
-    def __init__(self, main_tex, tmp_tex, main_pdf, input_type, dependencies=[]):
-        super().__init__()
+    class Handler(FileSystemEventHandler):
 
-        self._main_tex = main_tex
-        self._tmp_tex  = tmp_tex
-        self._main_pdf = main_pdf
-        self.input_type = input_type
+        def __init__(self, main_tex, tmp_tex, main_pdf, input_type, dependencies=[]):
+            super().__init__()
 
-        self._compiling = False
-        self._watch_files = [ os.path.realpath(main_tex), ] + [ os.path.realpath(dep) for dep in dependencies ]
+            self._main_tex = main_tex
+            self._tmp_tex  = tmp_tex
+            self._main_pdf = main_pdf
+            self.input_type = input_type
 
-    def recompile(self, event):
-        self._compiling = True
-        print_info('File %s changed. Compiling again ...' % event.src_path)
-        if self.input_type != 'main':
-            _, _, _ = _prepare_tex(self._main_tex, self._tmp_tex)
-            _compile_tex(self._tmp_tex, self._main_pdf, self.input_type)
-        else:
-            _compile_tex(self._main_tex, self._main_pdf, self.input_type)
-        self._compiling = False
+            self._compiling = False
+            self._watch_files = [ os.path.realpath(main_tex), ] + [ os.path.realpath(dep) for dep in dependencies ]
 
-    def on_any_event(self, event):
-        if event.is_directory:
-            return None
-        elif event.event_type == 'created':
-            # Event is created, you can process it now
-            # print("Watchdog received created event - % s." % event.src_path)
-            pass
-        elif event.event_type == 'modified':
-            # Event is modified, you can process it now
-            # print("Watchdog received modified event - % s." % event.src_path)
-            if event.src_path in self._watch_files:
-                self.recompile(event)
+        def recompile(self, event):
+            self._compiling = True
+            print_info('File %s changed. Compiling again ...' % event.src_path)
+            if self.input_type != 'main':
+                _, _, _ = _prepare_tex(self._main_tex, self._tmp_tex)
+                _compile_tex(self._tmp_tex, self._main_pdf, self.input_type)
+            else:
+                _compile_tex(self._main_tex, self._main_pdf, self.input_type)
+            self._compiling = False
+
+        def on_any_event(self, event):
+            if event.is_directory:
+                return None
+            elif event.event_type == 'created':
+                # Event is created, you can process it now
+                # print("Watchdog received created event - % s." % event.src_path)
+                pass
+            elif event.event_type == 'modified':
+                # Event is modified, you can process it now
+                # print("Watchdog received modified event - % s." % event.src_path)
+                if event.src_path in self._watch_files:
+                    self.recompile(event)
 
 
-class TexWatcher:
-    def __init__(self):
-        self.observer = Observer()
+    class TexWatcher:
+        def __init__(self):
+            self.observer = Observer()
 
-    def run(self, main_tex, tmp_tex, main_pdf, input_type, dependencies=[]):
+        def run(self, main_tex, tmp_tex, main_pdf, input_type, dependencies=[]):
 
-        main_dir = os.path.dirname(os.path.realpath(main_tex))
+            main_dir = os.path.dirname(os.path.realpath(main_tex))
 
-        event_handler = Handler(main_tex, tmp_tex, main_pdf, input_type, dependencies=[])
+            event_handler = Handler(main_tex, tmp_tex, main_pdf, input_type, dependencies=[])
 
-        self.observer.schedule(event_handler, main_dir, recursive=True)
-        self.observer.start()
-        try:
-            while True:
-                time.sleep(5)
-        except:
-            self.observer.stop()
-            print("Observer Stopped")
+            self.observer.schedule(event_handler, main_dir, recursive=True)
+            self.observer.start()
+            try:
+                while True:
+                    time.sleep(5)
+            except:
+                self.observer.stop()
+                print("Observer Stopped")
 
-        self.observer.join()
+            self.observer.join()
+except:
+    watchdog_available = False
+    pass
 
 
 def _prepare_plots(inputs):
@@ -911,8 +919,6 @@ def main():
         clatex_dir = '.clatex'
 
 
-
-
     #
     # Templates (create and exit!)
     #
@@ -929,11 +935,11 @@ def main():
         return 0
 
     elif args.slides is not None:
-        name = args.slides
-        with open('%s.tex' % name, 'w+') as f:
+        name = args.slides if args.slides.endswith('.tex') else '%s.tex'
+        with open(name, 'w+') as f:
             f.write(template_slides)
 
-        print_good('Slides template created: %s.tex' % name)
+        print_good('Slides template created: %s' % name)
         return 0
 
 
@@ -1008,10 +1014,14 @@ def main():
 
     # Continuous compilation
     if args.watcher:
-        dependencies = get_tex_dependencies(main_tex)
+        if watchdog_available:
 
-        _watcher = TexWatcher()
-        _watcher.run(main_tex, tmp_tex, main_pdf, input_type, dependencies)
+            dependencies = get_tex_dependencies(main_tex)
+
+            _watcher = TexWatcher()
+            _watcher.run(main_tex, tmp_tex, main_pdf, input_type, dependencies)
+        else:
+            print_error('Ignoring -w option as watchdog is not installed')
 
 
     # Clean temporary files
