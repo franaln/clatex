@@ -935,7 +935,7 @@ def main():
         return 0
 
     elif args.slides is not None:
-        name = args.slides if args.slides.endswith('.tex') else '%s.tex'
+        name = args.slides if args.slides.endswith('.tex') else '%s.tex' % args.slides
         with open(name, 'w+') as f:
             f.write(template_slides)
 
