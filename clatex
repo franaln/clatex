@@ -695,13 +695,14 @@ def _prepare_plots(inputs):
             if os.path.isdir(inp):
                 plots.extend([ os.path.join(inp, i) for i in os.listdir(inp) if i[-3:] in ('pdf', 'png') ])
             else:
-                plots.extend([ i for i in inputs if i[-3:] in ('pdf', 'png') and os.path.isfile(i) ])
+                if inp[-3:] in ('pdf', 'png'):
+                    plots.append(inp)
     else:
         if os.path.isdir(inputs):
             plots = [ os.path.join(inputs, i) for i in os.listdir(inputs) if i[-3:] in ('pdf', 'png') ]
         else:
-            plots.append(inputs)
-
+            if inputs[-3:] in ('pdf', 'png'):
+                plots.append(inputs)
 
     # Filter pdfs
     if args.filter is not None:
