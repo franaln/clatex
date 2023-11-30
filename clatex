@@ -495,7 +495,8 @@ def create_table_tex(input_tex, output_tex, scale):
 \usepackage{multirow}
 \usepackage{booktabs}
 \begin{document}
-\pagestyle{empty}\n'''
+\pagestyle{empty}
+'''
 
     tex += '\n'
     if scale is not None:
@@ -808,7 +809,7 @@ def _prepare_tex(main_tex, tmp_tex):
         args.engine = 'pdflatex'
 
         print_info('Creating tex %s --> %s' % (main_tex, tmp_tex))
-        create_table_tex(main_tex, tmp_tex, do_scale)
+        create_table_tex(main_tex, tmp_tex, args.scale)
 
     return main_pdf, tmp_tex, input_type
 
