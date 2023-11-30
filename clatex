@@ -883,7 +883,7 @@ def main():
     parser.add_argument('--tikz',  action='store_true', help='Compile tikz picture')
     parser.add_argument('--table', action='store_true', help='Compile table')
     parser.add_argument('--plain', action='store_true', help='Compile plain text')
-    parser.add_argument('-w', dest='watcher', action='store_true', help='Watch file for changes and compile (needs Gtk)')
+    parser.add_argument('-w', dest='watcher', action='store_true', help='Watch file for changes and compile')
     parser.add_argument('--nocrop', action='store_true', help='Don\'t crop pdf output')
     parser.add_argument('--scale', help='Scale')
     parser.add_argument('--nodir', action='store_true', help='No clatex output dir')
