@@ -367,6 +367,9 @@ def compile_tex(input_path, output_path):
 
     tmp_pdf_file = get_clatex_path('%s.pdf' % name)
 
+    compile_ok = False
+    compile_info = None
+
     if args.only:
         filecmd = r'"\includeonly{%s}\input{%s}"' % (args.only, input_path)
     else:
@@ -1023,7 +1026,7 @@ def main():
             _watcher = TexWatcher()
             _watcher.run(main_tex, tmp_tex, main_pdf, input_type, dependencies)
         else:
-            print_error('Ignoring -w option as watchdog is not installed')
+            print_err('Ignoring -w option as watchdog is not installed')
 
 
     # Clean temporary files
