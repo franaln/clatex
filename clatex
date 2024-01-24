@@ -571,6 +571,87 @@ def create_plots_tex(input_plots, output_tex):
 
     return
 
+
+def create_cmp_plots_tex(input_plots, output_tex):
+
+    header = r"""%% Created with clatex
+\documentclass[center,10pt,cm,aspectratio=169]{beamer}
+
+% basic style
+\renewcommand\familydefault{\rmdefault}
+\setbeamercolor*{frametitle}{bg=white,fg=black}
+\setbeamertemplate{navigation symbols}{}
+
+\begin{document}
+\centering
+
+   """
+
+    footer = r"""
+
+\end{document}
+"""
+
+    body = ""
+    counter = 0
+
+    #chunks = [pdf_files[x:x+args.cols] for x in xrange(0, len(pdf_files), args.cols)]
+
+    for plots in input_plots:
+
+        # if plot[-3:] not in ('pdf', 'png'):
+        #     continue
+
+        title = plots[0][:-4].replace('_', '\_')
+
+        if len(title) > 75:
+            title = '{\\tiny %s}' % title
+        elif len(title) > 60:
+            title = '{\\scriptsize %s}' % title
+        elif len(title) > 45:
+            title = '{\\small %s}' % title
+
+        if len(plots) == 2:
+            body += r"""
+\begin{frame}{%s}
+    \includegraphics[width=0.48\textwidth,height=0.9\textheight,keepaspectratio]{%s}
+    \includegraphics[width=0.48\textwidth,height=0.9\textheight,keepaspectratio]{%s}
+\end{frame}
+""" % (title, plots[0], plots[1])
+        elif len(plots) == 3:
+            body += r"""
+\begin{frame}{%s}
+    \includegraphics[width=0.32\textwidth,height=0.9\textheight,keepaspectratio]{%s}
+    \includegraphics[width=0.32\textwidth,height=0.9\textheight,keepaspectratio]{%s}
+    \includegraphics[width=0.32\textwidth,height=0.9\textheight,keepaspectratio]{%s}
+\end{frame}
+""" % (title, plots[0], plots[1], plots[2])
+        elif len(plots) == 4:
+            body += r"""
+\begin{frame}{%s}
+    \includegraphics[width=0.24\textwidth,height=0.9\textheight,keepaspectratio]{%s}
+    \includegraphics[width=0.24\textwidth,height=0.9\textheight,keepaspectratio]{%s}
+    \includegraphics[width=0.24\textwidth,height=0.9\textheight,keepaspectratio]{%s}
+    \includegraphics[width=0.24\textwidth,height=0.9\textheight,keepaspectratio]{%s}
+\end{frame}
+""" % (title, plots[0], plots[1], plots[2], plots[3])
+
+        counter += 1
+
+    if not body:
+        print_err('No plots to add')
+        return None
+
+    text = header + body + footer
+
+    with open(output_tex, 'w+') as f:
+        f.write(text)
+
+    print_good('Created slides "%s" with %i plots' % (output_tex, counter))
+
+    return
+
+
 def create_python_text(input_py, tmp_py, output_tex):
 
     python_code = template_python_fns + \
@@ -750,6 +831,66 @@ def _prepare_plots(inputs):
     return plots
 
 
+def _prepare_cmp_plots(inputs):
+
+    # Input should be 2-4 directories
+
+    plots = []
+
+    if not isinstance(inputs, list):
+        print_err('The input for cmp_plot shoul be a list of directories (<=4)')
+        return []
+
+    dirs = [ name for name in inputs if os.path.isdir(name) ]
+
+    if len(dirs) < 2 or len(dirs) > 4:
+        print_err('The input for cmp_plot shoul be a list of directories (<=4)')
+        return []
+
+    for name in os.listdir(dirs[0]):
+        if name[-3:] not in ('pdf', 'png'):
+            continue
+
+        l = [ os.path.join(dirs[0], name) ]
+
+        for d in dirs[1:]:
+            if os.path.exists(os.path.join(d, name)):
+                l.append(os.path.join(d, name))
+
+        if len(l) > 1:
+            plots.append(l)
+
+
+        # new_plots = []
+
+        # if '&&' in args.filter:
+        #     filters = args.filter.split('&&')
+        #     for plot in plots:
+        #         if all([ft in plot for ft in filters]):
+        #             new_plots.append(plot)
+
+        # elif '||' in args.filter:
+        #     filters = args.filter.split('||')
+        #     for plot in plots:
+        #         if any([ft in plot for ft in filters]):
+        #             new_plots.append(plot)
+        # else:
+        #     for plot in plots:
+        #         if args.filter in plot:
+        #             new_plots.append(plot)
+
+        # plots = new_plots
+
+    # Sort pdfs
+    # if args.sort is not None:
+    #     plots.sort(key = lambda x: x.split(args.sort_sep)[args.sort-1])
+    # else:
+    #     plots.sort()
+
+
+    return plots
+
+
 def _prepare_tex(main_tex, tmp_tex):
 
     main_name = os.path.splitext(os.path.basename(main_tex))[0]
@@ -893,13 +1034,13 @@ def main():
     parser.add_argument('--atlas', action='store_true', help='Use --nodir and pdflatex engine (for ATLAS notes/papers)')
 
     # Merge pdfs in slides
-    parser.add_argument('--pdfs', action='store_true', help='Merge pdfs in slides')
-    parser.add_argument('--plots', action='store_true', help='Merge plots in slides')
+    parser.add_argument('--plots', '--pdfs', dest='plots', action='store_true', help='Merge plots in slides')
+    parser.add_argument('--cmp', dest='cmp_plots', action='store_true', help='Compare plots inside input directories (2<=N<=4)')
     parser.add_argument('--filter', help='Filter files (to use with --pdfs)')
     parser.add_argument('--sort', type=int, default=None, help='')
     parser.add_argument('--sort-sep', dest='sort_sep', default='_', help='')
-    parser.add_argument('--cols', help='')
-    parser.add_argument('--matrix', help='')
+    #parser.add_argument('--cols', help='')
+    #parser.add_argument('--matrix', help='')
 
     # Templates
     parser.add_argument('--sl', dest='slides', help='Create slides template')
@@ -975,7 +1116,7 @@ def main():
     need_crop = False
 
     # Slides from input pdfs (--pdfs)
-    if args.plots or args.pdfs:
+    if args.plots:
 
         plots = _prepare_plots(inputs)
 
@@ -983,6 +1124,13 @@ def main():
 
         create_plots_tex(plots, main_tex) ##, matrix)
 
+    elif args.cmp_plots:
+
+        plots = _prepare_cmp_plots(inputs)
+
+        main_tex = '%s/cmp_plots.tex' % clatex_dir if args.tex is None else args.tex
+
+        create_cmp_plots_tex(plots, main_tex)
 
     elif not inputs:
         main_tex = find_tex_file()
