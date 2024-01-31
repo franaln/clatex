@@ -6,6 +6,7 @@ import sys
 import time
 import glob
 import shutil
+import string
 import argparse
 import subprocess
 from datetime import datetime
@@ -173,6 +174,173 @@ template_python_after = r"""
 edoc()
 """
 
+template_footer = r"""
+
+\end{document}
+"""
+
+template_plain_header = r"""\documentclass{article}
+\usepackage[utf8]{inputenc}
+
+\begin{document}
+"""
+
+template_plots_header = r"""%% Created with clatex
+\documentclass[center,10pt,cm,aspectratio=169]{beamer}
+
+% basic style
+\renewcommand\familydefault{\rmdefault}
+\setbeamercolor*{frametitle}{bg=white,fg=black}
+\setbeamertemplate{navigation symbols}{}
+
+\begin{document}
+\centering
+
+"""
+
+template_plots_cmp_2 = r"""
+\begin{frame}{$title}
+    \begin{minipage}{0.5\textwidth}
+        \centering
+
+        $label1
+
+        \includegraphics[width=0.9\textwidth,height=0.9\textheight,keepaspectratio]{$plot1}
+
+    \end{minipage}%
+    \begin{minipage}{0.5\textwidth}
+        \centering
+
+        $label2
+
+        \includegraphics[width=0.9\textwidth,height=0.9\textheight,keepaspectratio]{$plot2}
+    \end{minipage}
+\end{frame}
+"""
+
+template_plots_cmp_3 = r"""
+\begin{frame}{$title}
+    \begin{minipage}{0.32\textwidth}
+        \centering
+
+        $label1
+
+        \includegraphics[width=0.9\textwidth,height=0.9\textheight,keepaspectratio]{$plot1}
+
+    \end{minipage}%
+    \begin{minipage}{0.32\textwidth}
+        \centering
+
+        $label2
+
+        \includegraphics[width=0.9\textwidth,height=0.9\textheight,keepaspectratio]{$plot2}
+    \end{minipage}%
+    \begin{minipage}{0.32\textwidth}
+        \centering
+
+        $label3
+
+        \includegraphics[width=0.9\textwidth,height=0.9\textheight,keepaspectratio]{$plot3}
+    \end{minipage}
+
+\end{frame}
+"""
+
+template_plots_cmp_4 = r"""
+\begin{frame}{$title}
+    \begin{minipage}{0.24\textwidth}
+        \centering
+
+        $label1
+
+        \includegraphics[width=0.48\textwidth,height=0.9\textheight,keepaspectratio]{$plot1}
+
+    \end{minipage}%
+    \begin{minipage}{0.24\textwidth}
+        \centering
+
+        $label2
+
+        \includegraphics[width=0.48\textwidth,height=0.9\textheight,keepaspectratio]{$plot2}
+    \end{minipage}%
+    \begin{minipage}{0.24\textwidth}
+        \centering
+
+        $label3
+
+        \includegraphics[width=0.48\textwidth,height=0.9\textheight,keepaspectratio]{$plot3}
+
+    \end{minipage}%
+    \begin{minipage}{0.24\textwidth}
+        \centering
+
+        $label4
+
+        \includegraphics[width=0.48\textwidth,height=0.9\textheight,keepaspectratio]{$plot4}
+    \end{minipage}
+\end{frame}
+"""
+
+template_table_header = r'''\documentclass{article}
+\usepackage{graphicx}
+\usepackage[landscape]{geometry}
+\usepackage{multirow}
+\usepackage{booktabs}
+\begin{document}
+\pagestyle{empty}
+'''
+
+template_tikz_header = r"""\documentclass{article}
+\usepackage[utf8]{inputenc}
+\usepackage{mathptmx}
+\usepackage{tikz}
+\usetikzlibrary{patterns}
+\usepackage{xifthen}
+
+%\usepackage{color}
+\usepackage[active,pdftex,tightpage]{preview}
+\PreviewEnvironment[]{tikzpicture}
+\PreviewEnvironment[]{pgfpicture}
+\DeclareSymbolFont{symbolsb}{OMS}{cmsy}{m}{n}
+\SetSymbolFont{symbolsb}{bold}{OMS}{cmsy}{b}{n}
+\DeclareSymbolFontAlphabet{\mathcal}{symbolsb}
+\begin{document}
+"""
+
+#
+# utils
+#
+def fix_label(s):
+    return s.replace('_', '\_')
+
+def resize_label(s):
+    if len(s) > 75:
+        return '{\\tiny %s}' % s
+    elif len(s) > 60:
+        return '{\\scriptsize %s}' % s
+    elif len(s) > 45:
+        return '{\\small %s}' % s
+    else:
+        return s
+
+def resize_fix_label(s):
+    return resize_label(fix_label(s))
+
+def get_mtime(fname):
+    return os.path.getmtime(fname)
+
+def bytes_to_human(num):
+    num = int(num)
+    for unit in ['', 'K', 'M', 'G', 'T', 'P', 'E', 'Z']:
+        if abs(num) < 1024.0:
+            return "%3.1f %sB" % (num, unit)
+        num /= 1024.0
+    return "%.1f %sB" % (num, 'Y')
+
+
+#
+# find text and deps
+#
 def find_tex_file():
     tex_files = []
     for f in os.listdir('.'):
@@ -201,10 +369,6 @@ def find_tex_file():
         return None
     else:
         return main[0]
-
-
-def get_mtime(fname):
-    return os.path.getmtime(fname)
 
 
 def get_tex_dependencies(fname):
@@ -253,15 +417,6 @@ def get_bibtex_style(main_tex):
 #
 # Colorize LaTeX output.
 #
-def bytes_to_human(num):
-    num = int(num)
-    for unit in ['', 'K', 'M', 'G', 'T', 'P', 'E', 'Z']:
-        if abs(num) < 1024.0:
-            return "%3.1f %sB" % (num, unit)
-        num /= 1024.0
-    return "%.1f %sB" % (num, 'Y')
-
-
 def colorize_latex_output(logfile, show=True):
 
     try:
@@ -441,96 +596,41 @@ def compile_tex(input_path, output_path):
 #
 def create_plain_tex(input_tex, output_tex):
 
-    template_before = r"""\documentclass{article}
-\usepackage[utf8]{inputenc}
-
-\begin{document}
-"""
-
-    template_after = r"""
-\end{document}
-"""
-
     text = open(input_tex, 'r').read()
 
     with open(output_tex, 'wt', encoding='utf-8') as of:
-        of.write(template_before)
+        of.write(template_plain_header)
         of.write(text)
-        of.write(template_after)
+        of.write(template_footer)
 
 
 def create_tikz_tex(input_tex, output_tex):
 
-    template_before = r"""\documentclass{article}
-\usepackage[utf8]{inputenc}
-\usepackage{mathptmx}
-\usepackage{tikz}
-\usetikzlibrary{patterns}
-\usepackage{xifthen}
-
-%\usepackage{color}
-\usepackage[active,pdftex,tightpage]{preview}
-\PreviewEnvironment[]{tikzpicture}
-\PreviewEnvironment[]{pgfpicture}
-\DeclareSymbolFont{symbolsb}{OMS}{cmsy}{m}{n}
-\SetSymbolFont{symbolsb}{bold}{OMS}{cmsy}{b}{n}
-\DeclareSymbolFontAlphabet{\mathcal}{symbolsb}
-\begin{document}
-"""
-
-    template_after = r"""
-\end{document}
-"""
-
     tikzplot = open(input_tex, 'r').read()
 
     with open(output_tex, 'wt', encoding='utf-8') as of:
-        of.write(template_before)
+        of.write(template_tikz_header)
         of.write(tikzplot)
-        of.write(template_after)
+        of.write(template_footer)
 
 
 def create_table_tex(input_tex, output_tex, scale):
 
-    tex = r'''\documentclass{article}
-\usepackage{graphicx}
-\usepackage[landscape]{geometry}
-\usepackage{multirow}
-\usepackage{booktabs}
-\begin{document}
-\pagestyle{empty}
-'''
+    text = template_table_header
 
     tex += '\n'
     if scale is not None:
         tex += '\scalebox{%s}{%s}' % (float(scale), open(input_tex).read())
     else:
         tex += open(input_tex).read()
-    tex += '\n\\end{document}'
+
+    tex += template_footer
 
     with open(output_tex, 'wt', encoding='utf-8') as of:
         of.write(tex)
 
 
 def create_plots_tex(input_plots, output_tex):
-
-    header = r"""%% Created with clatex
-\documentclass[center,10pt,cm,aspectratio=169]{beamer}
-
-% basic style
-\renewcommand\familydefault{\rmdefault}
-\setbeamercolor*{frametitle}{bg=white,fg=black}
-\setbeamertemplate{navigation symbols}{}
-
-\begin{document}
-\centering
-
-   """
-
-    footer = r"""
-
-\end{document}
-"""
 
     body = ""
     counter = 0
@@ -562,7 +662,7 @@ def create_plots_tex(input_plots, output_tex):
         print_err('No plots to add')
         return None
 
-    text = header + body + footer
+    text = template_plots_header + body + template_footer
 
     with open(output_tex, 'w+') as f:
         f.write(text)
@@ -572,82 +672,115 @@ def create_plots_tex(input_plots, output_tex):
     return
 
 
-def create_cmp_plots_tex(input_plots, output_tex):
+def create_cmp_plots_tex(inputs, output_tex):
 
-    header = r"""%% Created with clatex
-\documentclass[center,10pt,cm,aspectratio=169]{beamer}
+    # Input should be 2-4 directories
 
-% basic style
-\renewcommand\familydefault{\rmdefault}
-\setbeamercolor*{frametitle}{bg=white,fg=black}
-\setbeamertemplate{navigation symbols}{}
+    if not isinstance(inputs, list):
+        print_err('The input for cmp_plot shoul be a list of directories (<=4)')
+        return []
 
-\begin{document}
-\centering
+    dirs = [ name for name in inputs if os.path.isdir(name) ]
 
-   """
+    if len(dirs) < 2 or len(dirs) > 4:
+        print_err('The input for cmp_plot shoul be a list of directories (<=4)')
+        return []
 
-    footer = r"""
-
-\end{document}
-"""
 
     body = ""
     counter = 0
 
-    #chunks = [pdf_files[x:x+args.cols] for x in xrange(0, len(pdf_files), args.cols)]
+    for name in os.listdir(dirs[0]):
+        if name[-3:] not in ('pdf', 'png'):
+            continue
 
-    for plots in input_plots:
+        plots = [ os.path.join(d, name) for d in dirs if os.path.exists(os.path.join(d, name)) ]
 
-        # if plot[-3:] not in ('pdf', 'png'):
-        #     continue
 
-        title = plots[0][:-4].replace('_', '\_')
-
-        if len(title) > 75:
-            title = '{\\tiny %s}' % title
-        elif len(title) > 60:
-            title = '{\\scriptsize %s}' % title
-        elif len(title) > 45:
-            title = '{\\small %s}' % title
-
-        if len(plots) == 2:
-            body += r"""
-\begin{frame}{%s}
-    \includegraphics[width=0.48\textwidth,height=0.9\textheight,keepaspectratio]{%s}
-    \includegraphics[width=0.48\textwidth,height=0.9\textheight,keepaspectratio]{%s}
-\end{frame}
-""" % (title, plots[0], plots[1])
-        elif len(plots) == 3:
-            body += r"""
-\begin{frame}{%s}
-    \includegraphics[width=0.32\textwidth,height=0.9\textheight,keepaspectratio]{%s}
-    \includegraphics[width=0.32\textwidth,height=0.9\textheight,keepaspectratio]{%s}
-    \includegraphics[width=0.32\textwidth,height=0.9\textheight,keepaspectratio]{%s}
-\end{frame}
-""" % (title, plots[0], plots[1], plots[2])
-        elif len(plots) == 4:
-            body += r"""
-\begin{frame}{%s}
-    \includegraphics[width=0.24\textwidth,height=0.9\textheight,keepaspectratio]{%s}
-    \includegraphics[width=0.24\textwidth,height=0.9\textheight,keepaspectratio]{%s}
-    \includegraphics[width=0.24\textwidth,height=0.9\textheight,keepaspectratio]{%s}
-    \includegraphics[width=0.24\textwidth,height=0.9\textheight,keepaspectratio]{%s}
-\end{frame}
-""" % (title, plots[0], plots[1], plots[2], plots[3])
+        if len(plots) != len(dirs):
+            print_warn(f'skipping {name} ...')
+            continue
 
         counter += 1
+
+        title = resize_fix_label(name[:-4])
+
+        labels = [ resize_fix_label(s) for s in dirs ]
+
+        if len(plots) == 2:
+            body += string.Template(template_plots_cmp_2).substitute({
+                'title': title,
+                'label1': labels[0],
+                'label2': labels[1],
+                'plot1': plots[0],
+                'plot2': plots[1]
+                })
+
+        elif len(plots) == 3:
+            body += string.Template(template_plots_cmp_3).substitute({
+                'title': title,
+                'label1': labels[0],
+                'label2': labels[1],
+                'label3': labels[2],
+                'plot1': plots[0],
+                'plot2': plots[1],
+                'plot3': plots[2]
+                })
+        elif len(plots) == 4:
+            body += string.Template(template_plots_cmp_4).substitute({
+                'title': title,
+                'label1': labels[0],
+                'label2': labels[1],
+                'label3': labels[2],
+                'label4': labels[3],
+                'plot1': plots[0],
+                'plot2': plots[1],
+                'plot3': plots[2],
+                'plot4': plots[3],
+                })
+
+
+        # new_plots = []
+
+        # if '&&' in args.filter:
+        #     filters = args.filter.split('&&')
+        #     for plot in plots:
+        #         if all([ft in plot for ft in filters]):
+        #             new_plots.append(plot)
+
+        # elif '||' in args.filter:
+        #     filters = args.filter.split('||')
+        #     for plot in plots:
+        #         if any([ft in plot for ft in filters]):
+        #             new_plots.append(plot)
+        # else:
+        #     for plot in plots:
+        #         if args.filter in plot:
+        #             new_plots.append(plot)
+
+        # plots = new_plots
+
+    # Sort pdfs
+    # if args.sort is not None:
+    #     plots.sort(key = lambda x: x.split(args.sort_sep)[args.sort-1])
+    # else:
+    #     plots.sort()
+
+
+
+
+    #chunks = [pdf_files[x:x+args.cols] for x in xrange(0, len(pdf_files), args.cols)]
 
     if not body:
         print_err('No plots to add')
         return None
 
-    text = header + body + footer
+    text = template_plots_header + body + template_footer
 
     with open(output_tex, 'w+') as f:
         f.write(text)
 
-    print_good('Created slides "%s" with %i plots' % (output_tex, counter))
+    print_good('Created %i slides "%s" comparing plots' % (counter, output_tex))
 
     return
 
@@ -831,65 +964,6 @@ def _prepare_plots(inputs):
     return plots
 
 
-def _prepare_cmp_plots(inputs):
-
-    # Input should be 2-4 directories
-
-    plots = []
-
-    if not isinstance(inputs, list):
-        print_err('The input for cmp_plot shoul be a list of directories (<=4)')
-        return []
-
-    dirs = [ name for name in inputs if os.path.isdir(name) ]
-
-    if len(dirs) < 2 or len(dirs) > 4:
-        print_err('The input for cmp_plot shoul be a list of directories (<=4)')
-        return []
-
-    for name in os.listdir(dirs[0]):
-        if name[-3:] not in ('pdf', 'png'):
-            continue
-
-        l = [ os.path.join(dirs[0], name) ]
-
-        for d in dirs[1:]:
-            if os.path.exists(os.path.join(d, name)):
-                l.append(os.path.join(d, name))
-
-        if len(l) > 1:
-            plots.append(l)
-
-
-        # new_plots = []
-
-        # if '&&' in args.filter:
-        #     filters = args.filter.split('&&')
-        #     for plot in plots:
-        #         if all([ft in plot for ft in filters]):
-        #             new_plots.append(plot)
-
-        # elif '||' in args.filter:
-        #     filters = args.filter.split('||')
-        #     for plot in plots:
-        #         if any([ft in plot for ft in filters]):
-        #             new_plots.append(plot)
-        # else:
-        #     for plot in plots:
-        #         if args.filter in plot:
-        #             new_plots.append(plot)
-
-        # plots = new_plots
-
-    # Sort pdfs
-    # if args.sort is not None:
-    #     plots.sort(key = lambda x: x.split(args.sort_sep)[args.sort-1])
-    # else:
-    #     plots.sort()
-
-
-    return plots
-
 
 def _prepare_tex(main_tex, tmp_tex):
 
@@ -897,7 +971,7 @@ def _prepare_tex(main_tex, tmp_tex):
     main_pdf = '%s.pdf' % main_name if args.output is None else args.output
 
     # Check if tmp tex file is needed
-    input_type = None
+2    input_type = None
     if args.plain:
         input_type = 'plain'
     elif args.tikz:
@@ -1126,11 +1200,9 @@ def main():
 
     elif args.cmp_plots:
 
-        plots = _prepare_cmp_plots(inputs)
-
         main_tex = '%s/cmp_plots.tex' % clatex_dir if args.tex is None else args.tex
 
-        create_cmp_plots_tex(plots, main_tex)
+        create_cmp_plots_tex(inputs, main_tex)
 
     elif not inputs:
         main_tex = find_tex_file()
