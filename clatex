@@ -971,7 +971,7 @@ def _prepare_tex(main_tex, tmp_tex):
     main_pdf = '%s.pdf' % main_name if args.output is None else args.output
 
     # Check if tmp tex file is needed
-2    input_type = None
+    input_type = None
     if args.plain:
         input_type = 'plain'
     elif args.tikz:
