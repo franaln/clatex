@@ -311,7 +311,7 @@ template_tikz_header = r"""\documentclass{article}
 # utils
 #
 def fix_label(s):
-    return s.replace('_', '\_')
+    return s.replace('_', r'\_')
 
 def resize_label(s):
     if len(s) > 75:
@@ -425,7 +425,7 @@ def colorize_latex_output(logfile, show=True):
     except UnicodeDecodeError as e:
         raise
 
-    line_error = re.compile('^\./(\w*.tex)\:(\d*)\: (.*)')
+    line_error = re.compile(r'^\./(\w*.tex)\:(\d*)\: (.*)')
 
     n_warning = 0
     n_error = 0
@@ -474,7 +474,7 @@ def colorize_latex_output(logfile, show=True):
             if show and show_warnings:
                 print_warn(line)
 
-        if '*** (job aborted, no legal \end found)' in line:
+        if r'*** (job aborted, no legal \end found)' in line:
             compile_ok = False
             if show:
                 print_err(line)
@@ -620,7 +620,7 @@ def create_table_tex(input_tex, output_tex, scale):
 
     tex += '\n'
     if scale is not None:
-        tex += '\scalebox{%s}{%s}' % (float(scale), open(input_tex).read())
+        tex += r'\scalebox{%s}{%s}' % (float(scale), open(input_tex).read())
     else:
         tex += open(input_tex).read()
 
@@ -642,7 +642,7 @@ def create_plots_tex(input_plots, output_tex):
         if plot[-3:] not in ('pdf', 'png'):
             continue
 
-        title = plot[:-4].replace('_', '\_')
+        title = plot[:-4].replace('_', r'\_')
 
         if len(title) > 75:
             title = '{\\tiny %s}' % title
